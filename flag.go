@@ -86,14 +86,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
-
-	"github.com/docker/docker/pkg/homedir"
 )
 
 // ErrHelp is the error returned if the flag -help is invoked but no such flag is defined.
@@ -505,12 +502,7 @@ func Set(name, value string) error {
 // otherwise, the default values of all defined flags in the set.
 func (f *FlagSet) PrintDefaults() {
 	writer := tabwriter.NewWriter(f.Out(), 20, 1, 3, ' ', 0)
-	home := homedir.Get()
 
-	// Don't substitute when HOME is /
-	if runtime.GOOS != "windows" && home == "/" {
-		home = ""
-	}
 	f.VisitAll(func(flag *Flag) {
 		format := "  -%s=%s"
 		names := []string{}
@@ -521,11 +513,6 @@ func (f *FlagSet) PrintDefaults() {
 		}
 		if len(names) > 0 {
 			val := flag.DefValue
-
-			if home != "" && strings.HasPrefix(val, home) {
-				val = homedir.GetShortcutString() + val[len(home):]
-			}
-
 			fmt.Fprintf(writer, format, strings.Join(names, ", -"), val)
 			for i, line := range strings.Split(flag.Usage, "\n") {
 				if i != 0 {
