@@ -82,6 +82,7 @@
 package mflag
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -296,6 +297,11 @@ type FlagSet struct {
 	errorHandling    ErrorHandling
 	output           io.Writer // nil means stderr; use Out() accessor
 	nArgRequirements []nArgRequirement
+
+	// Original options to extend flag help message output
+	examples    map[string]string // examples are shown when promping usage
+	synopsis    string            // simple usage of command
+	description string            // command description
 }
 
 // A Flag represents the state of a flag.
@@ -370,6 +376,25 @@ func (f *FlagSet) Out() io.Writer {
 // If output is nil, os.Stderr is used.
 func (f *FlagSet) SetOutput(output io.Writer) {
 	f.output = output
+}
+
+// AddExample adds example for usage.
+func (f *FlagSet) AddUsageExample(cmd, desc string) {
+	// Initialize if size is zero
+	if len(f.examples) == 0 {
+		f.examples = make(map[string]string)
+	}
+	f.examples[cmd] = desc
+}
+
+// SetSynopsis sets flag description for usage.
+func (f *FlagSet) SetUsageSynopsis(synopsis string) {
+	f.synopsis = synopsis
+}
+
+// SetDescription sets flag description for usage.
+func (f *FlagSet) SetUsageDescription(desc string) {
+	f.description = desc
 }
 
 // VisitAll visits the flags in lexicographical order, calling fn for each.
@@ -501,7 +526,7 @@ func Set(name, value string) error {
 // PrintDefaults prints, to standard error unless configured
 // otherwise, the default values of all defined flags in the set.
 func (f *FlagSet) PrintDefaults() {
-	writer := tabwriter.NewWriter(f.Out(), 20, 1, 3, ' ', 0)
+	writer := tabwriter.NewWriter(f.Out(), 20, 1, 4, ' ', 0)
 
 	f.VisitAll(func(flag *Flag) {
 		format := "  -%s=%s"
@@ -514,14 +539,76 @@ func (f *FlagSet) PrintDefaults() {
 		if len(names) > 0 {
 			val := flag.DefValue
 			fmt.Fprintf(writer, format, strings.Join(names, ", -"), val)
-			for i, line := range strings.Split(flag.Usage, "\n") {
-				if i != 0 {
-					line = "  " + line
+
+			// Show usage with fixed length
+			br := bufio.NewReader(strings.NewReader(flag.Usage))
+			for {
+				buf := make([]byte, 45)
+				n, err := br.Read(buf)
+				if err != nil {
+					break
 				}
-				fmt.Fprintln(writer, "\t", line)
+
+				if n < 1 {
+					break
+				}
+
+				// Read until first space
+				left, _ := br.ReadBytes(" "[0])
+				exbuf := append(buf, left...)
+
+				// Delete new-line
+				output := strings.Replace(string(exbuf), "\n", "", -1)
+
+				// Delete front space
+				output = strings.TrimLeft(output, " ")
+
+				// Write output to writer
+				fmt.Fprintln(writer, "\t", output)
 			}
+
+			fmt.Fprintln(writer, "\t")
+
 		}
 	})
+	writer.Flush()
+}
+
+func (f *FlagSet) PrintExamples() {
+	writer := tabwriter.NewWriter(f.Out(), 20, 1, 4, ' ', 0)
+	for cmd, desc := range f.examples {
+		fmt.Fprintf(writer, "  %s", cmd)
+
+		// Show description with fixed lenge
+		br := bufio.NewReader(strings.NewReader(desc))
+		for {
+			buf := make([]byte, 45)
+			n, err := br.Read(buf)
+			if err != nil {
+				break
+			}
+
+			if n < 1 {
+				break
+			}
+
+			// Read until first space
+			left, _ := br.ReadBytes(" "[0])
+			exbuf := append(buf, left...)
+
+			// Delete new-line
+			output := strings.Replace(string(exbuf), "\n", "", -1)
+
+			// Delete front space
+			output = strings.TrimLeft(output, " ")
+
+			// Write output to writer
+			fmt.Fprintln(writer, "\t", output)
+		}
+
+		fmt.Fprintln(writer, "\t")
+
+	}
 	writer.Flush()
 }
 
@@ -532,12 +619,24 @@ func PrintDefaults() {
 
 // defaultUsage is the default function to print a usage message.
 func defaultUsage(f *FlagSet) {
-	if f.name == "" {
-		fmt.Fprintf(f.Out(), "Usage:\n")
-	} else {
-		fmt.Fprintf(f.Out(), "Usage of %s:\n", f.name)
+
+	if f.synopsis != "" {
+		fmt.Fprintf(f.Out(), "Usage:\n\n")
+		fmt.Fprintf(f.Out(), "  %s\n\n", f.synopsis)
 	}
+
+	if f.description != "" {
+		fmt.Fprintf(f.Out(), "Description:\n\n")
+		fmt.Fprintf(f.Out(), "  %s\n\n", f.description)
+	}
+
+	fmt.Fprintf(f.Out(), "Options:\n\n")
 	f.PrintDefaults()
+
+	if len(f.examples) > 0 {
+		fmt.Fprintf(f.Out(), "Examples:\n\n")
+		f.PrintExamples()
+	}
 }
 
 // NOTE: Usage is not just defaultUsage(CommandLine)
@@ -947,6 +1046,7 @@ func (f *FlagSet) parseOne() (bool, string, error) {
 		}
 		return false, name, ErrRetry
 	}
+
 	if fv, ok := flag.Value.(boolFlag); ok && fv.IsBoolFlag() { // special case: doesn't need an arg
 		if hasValue {
 			if err := fv.Set(value); err != nil {
@@ -1001,12 +1101,15 @@ func (f *FlagSet) Parse(arguments []string) error {
 	f.args = arguments
 	for {
 		seen, name, err := f.parseOne()
+
 		if seen {
 			continue
 		}
+
 		if err == nil {
 			break
 		}
+
 		if err == ErrRetry {
 			if len(name) > 1 {
 				err = nil
@@ -1028,6 +1131,7 @@ func (f *FlagSet) Parse(arguments []string) error {
 				err = f.failf("flag provided but not defined: -%s", name)
 			}
 		}
+
 		switch f.errorHandling {
 		case ContinueOnError:
 			return err
@@ -1036,7 +1140,9 @@ func (f *FlagSet) Parse(arguments []string) error {
 		case PanicOnError:
 			panic(err)
 		}
+
 	}
+
 	return nil
 }
 
