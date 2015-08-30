@@ -567,7 +567,7 @@ func (f *FlagSet) PrintDefaults() {
 				fmt.Fprintln(writer, "\t", output)
 			}
 
-			fmt.Fprintln(writer, "\t")
+			//fmt.Fprintln(writer, "\t")
 
 		}
 	})
